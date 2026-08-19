@@ -30,6 +30,7 @@ class WeekNumberApp:
         self.countdown_job = None
         self.next_refresh_time = None
         self.today = date.today()
+        self.view_offset = 0
 
         self.setup_window()
         self.setup_styles()
@@ -41,7 +42,7 @@ class WeekNumberApp:
     def setup_window(self):
         iso_week = self.today.isocalendar().week
 
-        self.root.title(f"Week {iso_week:02d}")
+        self.root.title(f"W{iso_week:02d}")
         self.root.geometry("1120x560")
         self.root.minsize(940, 500)
         self.root.configure(bg=self.COLORS["background"])
@@ -357,9 +358,59 @@ class WeekNumberApp:
             sticky="nsew"
         )
 
-        calendar_area.grid_rowconfigure(0, weight=1)
+        calendar_area.grid_rowconfigure(0, weight=0)
+        calendar_area.grid_rowconfigure(1, weight=1)
         calendar_area.grid_columnconfigure(0, weight=1)
         calendar_area.grid_columnconfigure(1, weight=1)
+
+        nav_frame = tk.Frame(
+            calendar_area,
+            bg=self.COLORS["background"]
+        )
+
+        nav_frame.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 10)
+        )
+
+        nav_btn_kw = dict(
+            bg=self.COLORS["surface_alt"],
+            fg=self.COLORS["text"],
+            activebackground=self.COLORS["button"],
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            font=("Inter", 11),
+            cursor="hand2",
+            padx=12,
+            pady=5,
+        )
+
+        tk.Button(
+            nav_frame,
+            text="<",
+            command=self.go_prev_month,
+            **nav_btn_kw
+        ).pack(side="left")
+
+        self.now_button = tk.Button(
+            nav_frame,
+            text="now",
+            command=self.go_to_now,
+            **nav_btn_kw
+        )
+
+        self.now_button.pack(side="left", padx=6)
+
+        tk.Button(
+            nav_frame,
+            text=">",
+            command=self.go_next_month,
+            **nav_btn_kw
+        ).pack(side="left")
 
         self.current_calendar_frame = ttk.Frame(
             calendar_area,
@@ -368,7 +419,7 @@ class WeekNumberApp:
         )
 
         self.current_calendar_frame.grid(
-            row=0,
+            row=1,
             column=0,
             sticky="nsew",
             padx=(0, 10)
@@ -381,7 +432,7 @@ class WeekNumberApp:
         )
 
         self.next_calendar_frame.grid(
-            row=0,
+            row=1,
             column=1,
             sticky="nsew",
             padx=(10, 0)
@@ -576,36 +627,70 @@ class WeekNumberApp:
                 )
 
     def rebuild_calendars(self):
-        current_year = self.today.year
-        current_month = self.today.month
+        left_month = self.today.month + self.view_offset
+        left_year = self.today.year
 
-        next_month = current_month + 1
-        next_year = current_year
+        while left_month > 12:
+            left_month -= 12
+            left_year += 1
+        while left_month < 1:
+            left_month += 12
+            left_year -= 1
 
-        if next_month > 12:
-            next_month = 1
-            next_year += 1
+        right_month = left_month + 1
+        right_year = left_year
+
+        if right_month > 12:
+            right_month = 1
+            right_year += 1
+
+        left_subtitle = "Current month" if self.view_offset == 0 else ""
+        right_subtitle = "Next month" if self.view_offset == 0 else ""
 
         self.rebuild_calendar(
             self.current_calendar_frame,
-            current_year,
-            current_month,
-            "Current month"
+            left_year,
+            left_month,
+            left_subtitle
         )
 
         self.rebuild_calendar(
             self.next_calendar_frame,
-            next_year,
-            next_month,
-            "Next month"
+            right_year,
+            right_month,
+            right_subtitle
         )
+
+        self._update_now_button()
+
+    def _update_now_button(self):
+        if not hasattr(self, "now_button"):
+            return
+
+        if self.view_offset == 0:
+            self.now_button.config(fg=self.COLORS["text_faint"])
+        else:
+            self.now_button.config(fg=self.COLORS["text"])
+
+    def go_prev_month(self):
+        self.view_offset -= 1
+        self.rebuild_calendars()
+
+    def go_next_month(self):
+        self.view_offset += 1
+        self.rebuild_calendars()
+
+    def go_to_now(self):
+        self.view_offset = 0
+        self.rebuild_calendars()
 
     def refresh_display(self):
         self.today = date.today()
+        self.view_offset = 0
 
         iso_week = self.today.isocalendar().week
 
-        self.root.title(f"Week {iso_week:02d}")
+        self.root.title(f"W{iso_week:02d}")
 
         self.week_label.configure(
             text=f"W{iso_week:02d}"
