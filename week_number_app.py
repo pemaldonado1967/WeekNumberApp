@@ -1,26 +1,99 @@
 import calendar
+import json
+import os
+import time
 import tkinter as tk
 from datetime import date, datetime, timedelta
 from tkinter import ttk
+from zoneinfo import ZoneInfo
+
+CONFIG_PATH = os.path.join(
+    os.environ.get("APPDATA", os.path.expanduser("~")),
+    "WeekNumberApp",
+    "config.json"
+)
+
+CITY_TIMEZONES = [
+    ("Local (automatico)", "LOCAL"),
+    ("Honolulu", "Pacific/Honolulu"),
+    ("Anchorage", "America/Anchorage"),
+    ("Los Angeles", "America/Los_Angeles"),
+    ("Denver", "America/Denver"),
+    ("Ciudad de Mexico", "America/Mexico_City"),
+    ("Chicago", "America/Chicago"),
+    ("Bogota", "America/Bogota"),
+    ("Nueva York", "America/New_York"),
+    ("Santiago", "America/Santiago"),
+    ("Buenos Aires", "America/Argentina/Buenos_Aires"),
+    ("Sao Paulo", "America/Sao_Paulo"),
+    ("Azores", "Atlantic/Azores"),
+    ("Londres", "Europe/London"),
+    ("Lisboa", "Europe/Lisbon"),
+    ("Madrid", "Europe/Madrid"),
+    ("Paris", "Europe/Paris"),
+    ("Berlin", "Europe/Berlin"),
+    ("Roma", "Europe/Rome"),
+    ("Johannesburgo", "Africa/Johannesburg"),
+    ("Atenas", "Europe/Athens"),
+    ("Helsinki", "Europe/Helsinki"),
+    ("Moscu", "Europe/Moscow"),
+    ("Dubai", "Asia/Dubai"),
+    ("Karachi", "Asia/Karachi"),
+    ("Nueva Delhi", "Asia/Kolkata"),
+    ("Dhaka", "Asia/Dhaka"),
+    ("Bangkok", "Asia/Bangkok"),
+    ("Singapur", "Asia/Singapore"),
+    ("Hong Kong", "Asia/Hong_Kong"),
+    ("Shanghai", "Asia/Shanghai"),
+    ("Tokio", "Asia/Tokyo"),
+    ("Seul", "Asia/Seoul"),
+    ("Sidney", "Australia/Sydney"),
+    ("Auckland", "Pacific/Auckland"),
+]
+
+def format_utc_offset(offset_seconds):
+    sign = "+" if offset_seconds >= 0 else "-"
+    total_minutes = int(abs(offset_seconds) // 60)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
 
 
 class WeekNumberApp:
-    COLORS = {
-        "background": "#0B1120",
-        "surface": "#111827",
-        "surface_alt": "#172033",
-        "surface_muted": "#0F172A",
-        "border": "#263449",
-        "text": "#F8FAFC",
-        "text_muted": "#94A3B8",
-        "text_faint": "#64748B",
-        "accent": "#38BDF8",
-        "accent_dark": "#0C4A6E",
-        "accent_soft": "#164E63",
-        "today": "#F59E0B",
-        "today_text": "#1C1917",
-        "button": "#0284C7",
-        "button_active": "#0369A1",
+    THEMES = {
+        "dark": {
+            "background": "#0B1120",
+            "surface": "#111827",
+            "surface_alt": "#172033",
+            "surface_muted": "#0F172A",
+            "border": "#263449",
+            "text": "#F8FAFC",
+            "text_muted": "#94A3B8",
+            "text_faint": "#64748B",
+            "accent": "#38BDF8",
+            "accent_dark": "#0C4A6E",
+            "accent_soft": "#164E63",
+            "today": "#F59E0B",
+            "today_text": "#1C1917",
+            "button": "#0284C7",
+            "button_active": "#0369A1",
+        },
+        "light": {
+            "background": "#F1F5F9",
+            "surface": "#FFFFFF",
+            "surface_alt": "#F8FAFC",
+            "surface_muted": "#E2E8F0",
+            "border": "#CBD5E1",
+            "text": "#0F172A",
+            "text_muted": "#475569",
+            "text_faint": "#94A3B8",
+            "accent": "#0284C7",
+            "accent_dark": "#BAE6FD",
+            "accent_soft": "#E0F2FE",
+            "today": "#F59E0B",
+            "today_text": "#1C1917",
+            "button": "#0284C7",
+            "button_active": "#0369A1",
+        },
     }
 
     def __init__(self):
@@ -32,19 +105,32 @@ class WeekNumberApp:
         self.today = date.today()
         self.view_offset = 0
 
+        self.config_data = self.load_config()
+        self.theme_name = (
+            self.config_data.get("theme")
+            if self.config_data.get("theme") in self.THEMES
+            else "dark"
+        )
+        self.COLORS = self.THEMES[self.theme_name]
+
+        self.clock_slots = self.load_clock_slots()
+        self.clock_widgets = []
+        self.clock_job = None
+
         self.setup_window()
         self.setup_styles()
         self.build_ui()
 
         self.refresh_display()
         self.update_countdown()
+        self.update_clocks()
 
     def setup_window(self):
         iso_week = self.today.isocalendar().week
 
         self.root.title(f"W{iso_week:02d}")
-        self.root.geometry("1120x560")
-        self.root.minsize(940, 500)
+        self.root.geometry(self.config_data.get("geometry", "1120x720"))
+        self.root.minsize(940, 640)
         self.root.configure(bg=self.COLORS["background"])
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -141,6 +227,70 @@ class WeekNumberApp:
             padding=(16, 9),
             font=("Inter", 10, "bold")
         )
+
+        style.configure(
+            "Clock.TFrame",
+            background=self.COLORS["surface_alt"],
+            relief="flat"
+        )
+
+        style.configure(
+            "ClockCity.TLabel",
+            background=self.COLORS["surface_alt"],
+            foreground=self.COLORS["text_muted"],
+            font=("Inter", 9, "bold")
+        )
+
+        style.configure(
+            "ClockTime.TLabel",
+            background=self.COLORS["surface_alt"],
+            foreground=self.COLORS["text"],
+            font=("Inter", 24, "bold")
+        )
+
+        style.configure(
+            "ClockMeta.TLabel",
+            background=self.COLORS["surface_alt"],
+            foreground=self.COLORS["text_faint"],
+            font=("Inter", 8)
+        )
+
+        style.configure(
+            "Clock.TCombobox",
+            fieldbackground=self.COLORS["surface_alt"],
+            background=self.COLORS["surface_alt"],
+            foreground=self.COLORS["text"],
+            selectbackground=self.COLORS["surface_alt"],
+            selectforeground=self.COLORS["text"],
+            arrowcolor=self.COLORS["text_muted"],
+            borderwidth=0
+        )
+
+        style.map(
+            "Clock.TCombobox",
+            fieldbackground=[
+                ("readonly", self.COLORS["surface_alt"]),
+                ("disabled", self.COLORS["surface_alt"])
+            ],
+            foreground=[
+                ("readonly", self.COLORS["text"]),
+                ("disabled", self.COLORS["text_faint"])
+            ],
+            selectbackground=[
+                ("readonly", self.COLORS["surface_alt"])
+            ],
+            selectforeground=[
+                ("readonly", self.COLORS["text"])
+            ],
+            arrowcolor=[
+                ("readonly", self.COLORS["text_muted"])
+            ]
+        )
+
+        self.root.option_add("*TCombobox*Listbox.background", self.COLORS["surface_alt"])
+        self.root.option_add("*TCombobox*Listbox.foreground", self.COLORS["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", self.COLORS["accent_dark"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", self.COLORS["text"])
 
         style.map(
             "Modern.TButton",
@@ -280,15 +430,21 @@ class WeekNumberApp:
             command=self.manual_refresh
         ).pack(
             anchor="w",
-            pady=(0, 18)
+            pady=(0, 10)
         )
 
-        ttk.Label(
+        theme_button_text = (
+            "Light mode" if self.theme_name == "dark" else "Dark mode"
+        )
+
+        ttk.Button(
             sidebar,
-            text="Shortcut: Ctrl + R",
-            style="SmallMuted.TLabel"
+            text=theme_button_text,
+            style="Modern.TButton",
+            command=self.toggle_theme
         ).pack(
-            anchor="w"
+            anchor="w",
+            pady=(0, 18)
         )
 
         legend = ttk.Frame(
@@ -360,6 +516,7 @@ class WeekNumberApp:
 
         calendar_area.grid_rowconfigure(0, weight=0)
         calendar_area.grid_rowconfigure(1, weight=1)
+        calendar_area.grid_rowconfigure(2, weight=0)
         calendar_area.grid_columnconfigure(0, weight=1)
         calendar_area.grid_columnconfigure(1, weight=1)
 
@@ -437,6 +594,218 @@ class WeekNumberApp:
             sticky="nsew",
             padx=(10, 0)
         )
+
+        self.build_clocks_area(calendar_area)
+
+    def build_clocks_area(self, parent):
+        clocks_frame = ttk.Frame(
+            parent,
+            style="App.TFrame"
+        )
+
+        clocks_frame.grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(16, 0)
+        )
+
+        for column in range(3):
+            clocks_frame.grid_columnconfigure(
+                column,
+                weight=1,
+                uniform="clock_columns"
+            )
+
+        self.city_choices = self.build_city_choices()
+        city_labels = [label for label, _ in self.city_choices]
+        self.clock_widgets = []
+
+        for index in range(3):
+            card = ttk.Frame(
+                clocks_frame,
+                style="Clock.TFrame",
+                padding=12
+            )
+
+            card.grid(
+                row=0,
+                column=index,
+                sticky="ew",
+                padx=(0 if index == 0 else 8, 0)
+            )
+
+            selector_var = tk.StringVar()
+
+            selector = ttk.Combobox(
+                card,
+                textvariable=selector_var,
+                values=city_labels,
+                state="readonly",
+                style="Clock.TCombobox",
+                font=("Inter", 9)
+            )
+
+            selector.pack(fill="x", pady=(0, 8))
+
+            selector.bind(
+                "<<ComboboxSelected>>",
+                lambda event, i=index, var=selector_var: self.on_clock_selected(i, var)
+            )
+
+            time_label = ttk.Label(
+                card,
+                text="--:--:--",
+                style="ClockTime.TLabel"
+            )
+
+            time_label.pack(anchor="w")
+
+            meta_label = ttk.Label(
+                card,
+                text="",
+                style="ClockMeta.TLabel"
+            )
+
+            meta_label.pack(anchor="w")
+
+            self.clock_widgets.append({
+                "card": card,
+                "selector_var": selector_var,
+                "time_label": time_label,
+                "meta_label": meta_label,
+            })
+
+        self.refresh_clock_selectors()
+
+    def load_config(self):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as config_file:
+                data = json.load(config_file)
+                return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def save_config(self):
+        self.config_data["clock_slots"] = self.clock_slots
+        self.config_data["theme"] = self.theme_name
+
+        try:
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+
+            with open(CONFIG_PATH, "w", encoding="utf-8") as config_file:
+                json.dump(self.config_data, config_file)
+        except OSError:
+            pass
+
+    def load_clock_slots(self):
+        default_slots = ["LOCAL", "Europe/Madrid", "Asia/Tokyo"]
+        saved_slots = self.config_data.get("clock_slots")
+        valid_keys = {key for _, key in CITY_TIMEZONES}
+
+        if (
+            isinstance(saved_slots, list)
+            and len(saved_slots) == 3
+            and all(key in valid_keys for key in saved_slots)
+        ):
+            return saved_slots
+
+        return default_slots
+
+    def toggle_theme(self):
+        self.theme_name = "light" if self.theme_name == "dark" else "dark"
+        self.COLORS = self.THEMES[self.theme_name]
+        self.save_config()
+
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        self.root.configure(bg=self.COLORS["background"])
+        self.setup_styles()
+        self.build_ui()
+        self.refresh_display()
+        self.render_clocks()
+
+    def clock_offset_seconds(self, tz_key):
+        if tz_key == "LOCAL":
+            is_dst = time.localtime().tm_isdst > 0
+            return -(time.altzone if is_dst else time.timezone)
+
+        return ZoneInfo(tz_key).utcoffset(datetime.now()).total_seconds()
+
+    def build_city_choices(self):
+        choices = [
+            (self.clock_offset_seconds(key), label, key)
+            for label, key in CITY_TIMEZONES
+        ]
+
+        choices.sort(key=lambda choice: choice[0])
+
+        return [
+            (f"{format_utc_offset(offset)}  {label}", key)
+            for offset, label, key in choices
+        ]
+
+    def clock_label_for_key(self, tz_key):
+        for label, key in self.city_choices:
+            if key == tz_key:
+                return label
+        return tz_key
+
+    def on_clock_selected(self, index, selector_var):
+        city_label_to_key = dict(self.city_choices)
+        selected_key = city_label_to_key.get(selector_var.get())
+
+        if selected_key is not None:
+            self.clock_slots[index] = selected_key
+
+        self.clock_slots.sort(key=self.clock_offset_seconds)
+        self.refresh_clock_selectors()
+        self.render_clocks()
+        self.save_config()
+
+    def refresh_clock_selectors(self):
+        for widget, tz_key in zip(self.clock_widgets, self.clock_slots):
+            widget["selector_var"].set(self.clock_label_for_key(tz_key))
+
+    def render_clocks(self):
+        if not self.clock_widgets:
+            return
+
+        local_offset = self.clock_offset_seconds("LOCAL")
+
+        for widget, tz_key in zip(self.clock_widgets, self.clock_slots):
+            if tz_key == "LOCAL":
+                now = datetime.now()
+                offset_seconds = local_offset
+            else:
+                now = datetime.now(ZoneInfo(tz_key))
+                offset_seconds = now.utcoffset().total_seconds()
+
+            widget["time_label"].configure(text=now.strftime("%H:%M:%S"))
+
+            offset_hours = offset_seconds / 3600
+            offset_text = f"UTC{offset_hours:+.1f}".replace(".0", "")
+
+            day_delta = ""
+            if tz_key != "LOCAL" and now.date() != date.today():
+                day_delta = " · " + now.strftime("%a")
+
+            widget["meta_label"].configure(
+                text=f"{offset_text}{day_delta} · {now.strftime('%d %b')}"
+            )
+
+    def update_clocks(self):
+        self.render_clocks()
+
+        if self.clock_job is not None:
+            try:
+                self.root.after_cancel(self.clock_job)
+            except tk.TclError:
+                pass
+
+        self.clock_job = self.root.after(1000, self.update_clocks)
 
     def get_current_iso_week_key(self):
         iso = self.today.isocalendar()
@@ -779,6 +1148,9 @@ class WeekNumberApp:
         )
 
     def close(self):
+        self.config_data["geometry"] = self.root.geometry()
+        self.save_config()
+
         if self.refresh_job is not None:
             try:
                 self.root.after_cancel(self.refresh_job)
@@ -788,6 +1160,12 @@ class WeekNumberApp:
         if self.countdown_job is not None:
             try:
                 self.root.after_cancel(self.countdown_job)
+            except tk.TclError:
+                pass
+
+        if self.clock_job is not None:
+            try:
+                self.root.after_cancel(self.clock_job)
             except tk.TclError:
                 pass
 
